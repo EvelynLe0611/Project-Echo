@@ -145,7 +145,7 @@ pipeline {
             steps {
                 // The coverage report was created inside a container where the code lived at /app.
                 // Point it at the real folder in the repo so SonarCloud can match the files.
-                sh "sed -i 's#<source>/app</source>#<source>src/production/backend</source>#' reports/coverage.xml"
+                                sh "sed -i 's#<source>/app#<source>src/production/backend#' reports/coverage.xml"
 
                 withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
                     sh '''
