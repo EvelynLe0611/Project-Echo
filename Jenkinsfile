@@ -1,6 +1,14 @@
 pipeline {
     agent any
 
+    parameters {
+        booleanParam(
+            name: 'SIMULATE_FAILED_RELEASE',
+            defaultValue: false,
+            description: 'Incident simulation: release to production with a broken configuration to demonstrate automatic rollback'
+        )
+    }
+
     environment {
         IMAGE_NAME = 'echo-api'
         VERSION    = "1.0.${BUILD_NUMBER}"
@@ -272,6 +280,117 @@ pipeline {
                 }
                 failure {
                     sh 'docker logs --tail 50 echo-staging-api-1 2>&1 || true'
+                }
+            }
+        }
+
+        stage('Release to Production') {
+            options {
+                // If nobody approves within 30 minutes, the release is cancelled
+                timeout(time: 30, unit: 'MINUTES')
+            }
+            environment {
+                DEPLOY_ENV = 'production'
+                API_PORT   = '9200'
+            }
+            steps {
+                script {
+                    env.APPROVER = input(
+                        message: "Release ${VERSION} to production? It passed all tests, quality and security gates, and staging.",
+                        ok: 'Release',
+                        submitterParameter: 'APPROVER'
+                    )
+                }
+
+                withCredentials([
+                    string(credentialsId: 'PROD_JWT_SECRET', variable: 'JWT_SECRET'),
+                    string(credentialsId: 'PROD_MONGO_PASSWORD', variable: 'MONGO_PASSWORD')
+                ]) {
+                    sh '''
+                        set +e
+                        mkdir -p reports
+
+                        # Remember what production is running now, so we can roll back to it
+                        PREVIOUS=$(docker inspect echo-prod-api-1 --format '{{index .Config.Labels "version"}}' 2>/dev/null)
+                        echo "===== Release ${VERSION} approved by ${APPROVER} ====="
+                        echo "Current production version: ${PREVIOUS:-none (first release)}"
+
+                        # Incident simulation: break the configuration on purpose
+                        MAIL_SETTING="noreply@example.com"
+                        if [ "$SIMULATE_FAILED_RELEASE" = "true" ]; then
+                            echo "!!! INCIDENT SIMULATION: releasing with an invalid MAIL_FROM setting !!!"
+                            MAIL_SETTING="not-an-email"
+                        fi
+
+                        deploy() {
+                            IMAGE_TAG=$1 MAIL_FROM=$2 docker compose -p echo-prod -f deploy/docker-compose.yml \
+                              up -d --build --remove-orphans --wait --wait-timeout 120
+                        }
+
+                        verify() {
+                            DEPLOYED=$(docker inspect echo-prod-api-1 --format '{{index .Config.Labels "version"}}')
+                            echo "Production is running version: $DEPLOYED"
+                            [ "$DEPLOYED" = "$1" ] || return 1
+                            docker run --rm --network echo-prod_default \
+                              -e API_BASE_URL=http://api:9000 \
+                              ${IMAGE_NAME}:${VERSION} \
+                              sh -c "pip install -q pytest 'httpx<0.28' && python -m pytest -p no:warnings -v integration_tests -k 'api_is_up or metrics'"
+                        }
+
+                        echo "===== Deploying ${VERSION} to production (port ${API_PORT}) ====="
+                        if deploy ${VERSION} "$MAIL_SETTING" && verify ${VERSION}; then
+                            # Success: tag the release and write the release record
+                            docker tag ${IMAGE_NAME}:${VERSION} ${IMAGE_NAME}:production
+                            docker tag ${IMAGE_NAME}:${VERSION} ${IMAGE_NAME}:release-${VERSION}
+                            {
+                                echo "Release:          ${VERSION}"
+                                echo "Git commit:       ${GIT_SHORT}"
+                                echo "Approved by:      ${APPROVER}"
+                                echo "Released at:      $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+                                echo "Previous version: ${PREVIOUS:-none}"
+                                echo "Result:           SUCCESS"
+                            } > reports/release-${VERSION}.txt
+                            cat reports/release-${VERSION}.txt
+                            echo "RELEASED: production is now on ${VERSION}"
+                            exit 0
+                        fi
+
+                        echo "===== RELEASE FAILED: production health check did not pass ====="
+                        docker logs --tail 30 echo-prod-api-1 2>&1
+
+                        if [ -n "$PREVIOUS" ]; then
+                            echo "===== AUTOMATIC ROLLBACK to ${PREVIOUS} ====="
+                            if deploy "$PREVIOUS" "noreply@example.com" && verify "$PREVIOUS"; then
+                                RESULT="FAILED - automatically rolled back to ${PREVIOUS}"
+                            else
+                                RESULT="FAILED - ROLLBACK ALSO FAILED, manual action needed"
+                            fi
+                        else
+                            echo "No previous version to roll back to. Stopping the failed release."
+                            IMAGE_TAG=${VERSION} docker compose -p echo-prod -f deploy/docker-compose.yml stop api
+                            RESULT="FAILED - no previous version, production stopped"
+                        fi
+
+                        {
+                            echo "Release:          ${VERSION}"
+                            echo "Git commit:       ${GIT_SHORT}"
+                            echo "Approved by:      ${APPROVER}"
+                            echo "Attempted at:     $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+                            echo "Previous version: ${PREVIOUS:-none}"
+                            echo "Simulation:       ${SIMULATE_FAILED_RELEASE}"
+                            echo "Result:           ${RESULT}"
+                        } > reports/release-${VERSION}.txt
+                        cat reports/release-${VERSION}.txt
+                        exit 1
+                    '''
+                }
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'reports/release-*.txt', allowEmptyArchive: true
+                }
+                success {
+                    echo "Production is live: http://localhost:9200/docs (version ${VERSION})"
                 }
             }
         }

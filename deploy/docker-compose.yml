@@ -41,7 +41,7 @@ services:
       REDIS_HOST: redis
       MAIL_USERNAME: noreply@example.com
       MAIL_PASSWORD: not_used
-      MAIL_FROM: noreply@example.com
+      MAIL_FROM: ${MAIL_FROM:-noreply@example.com}
     ports:
       - "${API_PORT}:9000"
     depends_on:
