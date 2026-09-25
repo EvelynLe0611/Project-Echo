@@ -140,5 +140,27 @@ pipeline {
                 }
             }
         }
+
+        stage('Code Quality') {
+            steps {
+                // The coverage report was created inside a container where the code lived at /app.
+                // Point it at the real folder in the repo so SonarCloud can match the files.
+                sh "sed -i 's#<source>/app</source>#<source>src/production/backend</source>#' reports/coverage.xml"
+
+                withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
+                    sh '''
+                        docker run --rm -u root \
+                          --volumes-from jenkins \
+                          -w "$WORKSPACE" \
+                          -e SONAR_TOKEN \
+                          sonarsource/sonar-scanner-cli \
+                          -Dsonar.projectBaseDir="$WORKSPACE" \
+                          -Dsonar.projectVersion=${VERSION} \
+                          -Dsonar.qualitygate.wait=true \
+                          -Dsonar.qualitygate.timeout=300
+                    '''
+                }
+            }
+        }
     }
 }
