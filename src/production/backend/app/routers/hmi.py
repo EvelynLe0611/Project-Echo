@@ -408,7 +408,8 @@ def signin(user: schemas.UserLoginSchema):
         try:
             response = requests.post(
                 f"{settings.internal_api_base_url}/2fa/generate",
-                headers=headers
+                headers=headers,
+                timeout=10,
             )
             print(response.json())
             if response.status_code != 200:
@@ -719,7 +720,7 @@ def forgotpassword(user: schemas.ResetPasswordSchema):
 @router.get("/filter_algorithm/{algorithm_type}", status_code=status.HTTP_200_OK, response_description="returns the running filter algorithm name")
 def filter_name(algorithm_type : str):
     try:
-        algorithms_running = requests.get(f"{settings.internal_api_base_url}/engine/algorithms_data")
+        algorithms_running = requests.get(f"{settings.internal_api_base_url}/engine/algorithms_data", timeout=10)
         algorithm_name = algorithms_running.json()[algorithm_type]
         if(algorithm_name is not None):
             response = {"message": algorithm_name}

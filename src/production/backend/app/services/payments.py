@@ -56,8 +56,10 @@ class RazorpayClient:
                 "Content-Type": "application/json",
             },
         )
+        if not request.full_url.startswith("https://"):
+            raise ValueError("Only HTTPS URLs are allowed")
         try:
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with urllib.request.urlopen(request, timeout=10) as response:   # nosec B310 - scheme validated as https above
                 return json.loads(response.read().decode())
         except Exception as error:
             raise ProviderUnavailable() from error

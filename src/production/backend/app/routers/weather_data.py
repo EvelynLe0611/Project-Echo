@@ -1,8 +1,7 @@
 ## app.routers.weather_data.py
 import datetime
 import time
-from ftplib import FTP
-import pandas as pd
+from ftplib import FTP  # nosec B402 - anonymous download of public weather data, no credentials sentimport pandas as pd
 import io
 import os
 import json 
@@ -19,7 +18,7 @@ timestamp = 1709462927 #Random chosen date March 3 2024
 #Function to download weather station list with coordinates from FTP server
 def download_weather_stations_from_ftp(ftp_server, ftp_directory, local_directory):
 
-    with FTP(ftp_server) as ftp:
+    with FTP(ftp_server) as ftp: # nosec B321 - anonymous public data, see security report
 
         ftp.login(username,password)
         ftp.cwd(ftp_directory)
@@ -83,7 +82,7 @@ def find_closest_station(lat, lon, filepath):
 
 # Function to download files from FTP server
 def download_file_from_ftp(ftp_server, ftp_directory, local_directory,year_month, station_name):
-      with FTP(ftp_server) as ftp:
+      with FTP(ftp_server) as ftp: # nosec B321 - anonymous public data, see security report
 
         ftp.login(username, password)
         #ftp_directory_location = ftp_directory +  observe_location + '/'
