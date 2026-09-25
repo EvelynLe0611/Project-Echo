@@ -39,7 +39,7 @@ def list_projects(
 
 
 def create_project(payload: ProjectCreate) -> Project:
-    doc = payload.model_dump()
+    doc = payload.dict()
     now = datetime.now(timezone.utc)
     doc["created_at"] = now
     doc["updated_at"] = now
@@ -54,7 +54,7 @@ def update_project(project_id: str, payload: ProjectUpdate) -> Project:
         raise HTTPException(status_code=400, detail="Invalid project id")
 
     now = datetime.now(timezone.utc)
-    new_doc = payload.model_dump()
+    new_doc = payload.dict()
     new_doc["updated_at"] = now
 
     updated = Projects.find_one_and_update(
