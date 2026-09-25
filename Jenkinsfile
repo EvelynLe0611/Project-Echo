@@ -394,5 +394,30 @@ pipeline {
                 }
             }
         }
+
+        stage('Monitoring') {
+            steps {
+                withCredentials([string(credentialsId: 'GRAFANA_ADMIN_PASSWORD', variable: 'GRAFANA_ADMIN_PASSWORD')]) {
+                    sh '''
+                        echo "===== Starting or updating the monitoring stack (Prometheus + Grafana) ====="
+                        docker compose -p echo-monitoring -f deploy/monitoring/docker-compose.yml \
+                          up -d --build --remove-orphans --wait --wait-timeout 120
+                        docker compose -p echo-monitoring -f deploy/monitoring/docker-compose.yml ps
+                    '''
+                }
+
+                sh '''
+                    echo "===== Post-release monitoring check ====="
+                    docker run --rm -i --network echo-monitoring_default \
+                      ${IMAGE_NAME}:${VERSION} \
+                      python - < deploy/monitoring/check_monitoring.py
+                '''
+            }
+            post {
+                success {
+                    echo "Monitoring is live: Prometheus http://localhost:9090 | Grafana http://localhost:3000"
+                }
+            }
+        }
     }
 }

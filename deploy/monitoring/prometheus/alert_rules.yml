@@ -1,0 +1,42 @@
+groups:
+  - name: echo-api
+    rules:
+      - alert: EchoApiDown
+        expr: up{job="echo-api"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "Echo API is down ({{ $labels.environment }})"
+          description: "Prometheus has not been able to reach {{ $labels.instance }} for over 30 seconds."
+
+      - alert: EchoApiHighErrorRate
+        expr: >
+          sum by (environment) (rate(echo_http_requests_total{status=~"5.."}[2m]))
+          / sum by (environment) (rate(echo_http_requests_total[2m])) > 0.05
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High server error rate ({{ $labels.environment }})"
+          description: "More than 5% of requests are returning 5xx errors."
+
+      - alert: EchoApiSlowResponses
+        expr: >
+          histogram_quantile(0.95,
+            sum by (le, environment) (rate(echo_http_request_seconds_bucket[5m]))) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow responses ({{ $labels.environment }})"
+          description: "95% of requests should finish within 1 second, but the slowest 5% are taking longer."
+
+      - alert: EchoApiHighMemory
+        expr: process_resident_memory_bytes{job="echo-api"} > 500 * 1024 * 1024
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory use ({{ $labels.environment }})"
+          description: "The API has used more than 500 MB of memory for 5 minutes."

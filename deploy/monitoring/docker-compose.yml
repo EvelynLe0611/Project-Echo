@@ -1,0 +1,44 @@
+# Monitoring stack for Project Echo: Prometheus (metrics + alert rules) and Grafana (dashboard).
+# Config is baked into the images (see the Dockerfiles), so no folder mounts are needed.
+
+services:
+  prometheus:
+    build: ./prometheus
+    image: echo-prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - prometheus-data:/prometheus
+    networks:
+      - default
+      - prod
+      - staging
+    restart: unless-stopped
+
+  grafana:
+    build: ./grafana
+    image: echo-grafana:latest
+    ports:
+      - "3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  prometheus-data:
+  grafana-data:
+
+# Join the production and staging networks so Prometheus can reach both APIs
+networks:
+  prod:
+    external: true
+    name: echo-prod_default
+  staging:
+    external: true
+    name: echo-staging_default
