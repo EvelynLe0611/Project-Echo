@@ -1,0 +1,63 @@
+# Project Echo API - deployment definition used by the Jenkins pipeline.
+# The same file serves staging and production; Jenkins supplies the
+# environment-specific values (DEPLOY_ENV, API_PORT, IMAGE_TAG) and the
+# secrets (JWT_SECRET, MONGO_PASSWORD) from Jenkins credentials.
+
+services:
+  mongo:
+    build:
+      context: ../src/production/infrastructure/mongodb
+      dockerfile: MongoDB.Dockerfile
+    image: echo-mongo:${DEPLOY_ENV}
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+      MONGO_INITDB_DATABASE: EchoNet
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD-SHELL", "mongo --quiet -u root -p \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval 'db.adminCommand(\"ping\").ok'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
+    labels:
+      environment: ${DEPLOY_ENV}
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    labels:
+      environment: ${DEPLOY_ENV}
+    restart: unless-stopped
+
+  api:
+    image: echo-api:${IMAGE_TAG}
+    environment:
+      MONGODB_URI: mongodb://root:${MONGO_PASSWORD}@mongo:27017/EchoNet?authSource=admin
+      USER_MONGODB_URI: mongodb://root:${MONGO_PASSWORD}@mongo:27017/EchoNet?authSource=admin
+      MONGO_DB: EchoNet
+      JWT_SECRET: ${JWT_SECRET}
+      REDIS_HOST: redis
+      MAIL_USERNAME: noreply@example.com
+      MAIL_PASSWORD: not_used
+      MAIL_FROM: noreply@example.com
+    ports:
+      - "${API_PORT}:9000"
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    labels:
+      environment: ${DEPLOY_ENV}
+    restart: unless-stopped
+
+volumes:
+  mongo-data:

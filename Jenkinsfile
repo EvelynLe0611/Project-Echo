@@ -230,5 +230,50 @@ pipeline {
                 }
             }
         }
+
+        stage('Deploy to Staging') {
+            environment {
+                DEPLOY_ENV = 'staging'
+                API_PORT   = '9100'
+                IMAGE_TAG  = "${VERSION}"
+            }
+            steps {
+                withCredentials([
+                    string(credentialsId: 'STAGING_JWT_SECRET', variable: 'JWT_SECRET'),
+                    string(credentialsId: 'STAGING_MONGO_PASSWORD', variable: 'MONGO_PASSWORD')
+                ]) {
+                    sh '''
+                        echo "===== Deploying ${IMAGE_NAME}:${IMAGE_TAG} to ${DEPLOY_ENV} (port ${API_PORT}) ====="
+
+                        # Start or update staging, then wait until every service reports healthy
+                        docker compose -p echo-staging -f deploy/docker-compose.yml \
+                          up -d --build --remove-orphans --wait --wait-timeout 180
+
+                        docker compose -p echo-staging -f deploy/docker-compose.yml ps
+                    '''
+                }
+
+                sh '''
+                    echo "===== Deployed version check ====="
+                    DEPLOYED=$(docker inspect echo-staging-api-1 --format '{{index .Config.Labels "version"}}')
+                    echo "Staging is running version: $DEPLOYED"
+                    [ "$DEPLOYED" = "${VERSION}" ] || { echo "FAILED: expected ${VERSION}"; exit 1; }
+
+                    echo "===== Smoke tests against staging ====="
+                    docker run --rm --network echo-staging_default \
+                      -e API_BASE_URL=http://api:9000 \
+                      ${IMAGE_NAME}:${VERSION} \
+                      sh -c "pip install -q pytest 'httpx<0.28' && python -m pytest -p no:warnings -v integration_tests -k 'api_is_up or metrics'"
+                '''
+            }
+            post {
+                success {
+                    echo "Staging is live: http://localhost:9100/docs (version ${VERSION})"
+                }
+                failure {
+                    sh 'docker logs --tail 50 echo-staging-api-1 2>&1 || true'
+                }
+            }
+        }
     }
 }
