@@ -1,3 +1,10 @@
 # Accepted vulnerabilities - each entry is justified in the security report.
 # Format: CVE ID, then a comment with the reason and planned mitigation.
 # Entries are added only after review, never to hide unreviewed findings.
+
+# anyio 4.12.1 (transitive dependency via Starlette)
+# Reason: the fixed version (4.14.2) requires Python 3.10+; the image uses Python 3.9,
+#         so no compatible fixed version exists.
+# Mitigation: upgrade the base image to Python 3.10+ (with pymongo/motor upgrades).
+# Expires: re-review by 31 Dec 2026.
+CVE-2026-63374 exp:2026-12-31
