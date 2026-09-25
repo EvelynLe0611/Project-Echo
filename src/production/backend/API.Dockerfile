@@ -1,4 +1,4 @@
-ARG BASE_IMAGE=python:3.9-alpine 
+ARG BASE_IMAGE=python:3.9-alpine
 FROM ${BASE_IMAGE} AS echo_api_builder
 
 WORKDIR /build
@@ -12,15 +12,18 @@ RUN apk add --no-cache \
 	libffi-dev \
 	openssl-dev \
 	python3-dev \
-	make 
+	make
 
 # Create virtual environment
-RUN python -m venv /opt/venv 
+RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+
+# Security: upgrade the packaging tools inside the virtual environment
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 # Copy and install requirements
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt 
+RUN pip install --no-cache-dir -r requirements.txt
 
 
 # Runtime stage - slim final image
@@ -28,10 +31,15 @@ FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
-# Install only runtime dependencies (not build tools)
-RUN apk add --no-cache \
+# Security: apply Alpine security updates (OpenSSL, musl, zlib, etc.)
+# and install only runtime dependencies (not build tools)
+RUN apk upgrade --no-cache && \
+	apk add --no-cache \
 	libstdc++ \
 	libgcc
+
+# Security: upgrade the base image's own packaging tools
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 COPY --from=echo_api_builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"

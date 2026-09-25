@@ -49,7 +49,7 @@ pipeline {
                             docker rm -f unit-${BUILD_NUMBER} 2>/dev/null || true
                             set +e
                             docker run --name unit-${BUILD_NUMBER} --env-file ci/test.env ${IMAGE_NAME}:${VERSION} \
-                              sh -c "pip install -q mongomock 'httpx<0.28' pytest-cov && python -m pytest -p no:warnings tests test_config.py test_detection_rules.py ${KNOWN_FAILURES_UNIT} --junitxml=/tmp/reports/unit-tests.xml --cov=app --cov-report=xml:/tmp/reports/coverage.xml --cov-report=term"
+                              sh -c "pip install -q pytest mongomock 'httpx<0.28' pytest-cov && python -m pytest -p no:warnings tests test_config.py test_detection_rules.py ${KNOWN_FAILURES_UNIT} --junitxml=/tmp/reports/unit-tests.xml --cov=app --cov-report=xml:/tmp/reports/coverage.xml --cov-report=term"
                             STATUS=$?
                             docker cp unit-${BUILD_NUMBER}:/tmp/reports/. reports/
                             docker rm unit-${BUILD_NUMBER}
@@ -64,7 +64,7 @@ pipeline {
                             docker rm -f module-${BUILD_NUMBER} 2>/dev/null || true
                             set +e
                             docker run --name module-${BUILD_NUMBER} --env-file ci/test.env ${IMAGE_NAME}:${VERSION} \
-                              sh -c "pip install -q mongomock 'httpx<0.28' && python -m pytest -p no:warnings app/tests ${KNOWN_FAILURES_APP} --junitxml=/tmp/reports/module-tests.xml"
+                              sh -c "pip install -q pytest mongomock 'httpx<0.28' && python -m pytest -p no:warnings app/tests ${KNOWN_FAILURES_APP} --junitxml=/tmp/reports/module-tests.xml"
                             STATUS=$?
                             docker cp module-${BUILD_NUMBER}:/tmp/reports/. reports/
                             docker rm module-${BUILD_NUMBER}
@@ -116,7 +116,7 @@ pipeline {
                             docker run --name it-tests-${BUILD_NUMBER} --network $NET \
                               -e API_BASE_URL=http://it-api-${BUILD_NUMBER}:9000 \
                               ${IMAGE_NAME}:${VERSION} \
-                              sh -c "pip install -q 'httpx<0.28' && python -m pytest -p no:warnings -v integration_tests --junitxml=/tmp/reports/integration-tests.xml"
+                              sh -c "pip install -q pytest 'httpx<0.28' && python -m pytest -p no:warnings -v integration_tests --junitxml=/tmp/reports/integration-tests.xml"
                             STATUS=$?
                             docker cp it-tests-${BUILD_NUMBER}:/tmp/reports/. reports/
                             docker logs it-api-${BUILD_NUMBER} > reports/integration-api.log 2>&1
@@ -168,18 +168,26 @@ pipeline {
                 sh '''
                     mkdir -p reports
                     docker rm -f sec-${BUILD_NUMBER} 2>/dev/null || true
+                    set +e
 
                     echo "===== 1. Bandit (source code) and 2. pip-audit (Python libraries) ====="
-                    docker run --name sec-${BUILD_NUMBER} ${IMAGE_NAME}:${VERSION} sh -c "pip install -q bandit pip-audit && mkdir -p /tmp/reports && bandit -r app -x app/tests -f json -o /tmp/reports/bandit.json; bandit -r app -x app/tests -ll; pip-audit -f json -o /tmp/reports/pip-audit.json; pip-audit; exit 0"
+                    # pip freeze runs BEFORE the scanners are installed, so pip-audit
+                    # only checks the libraries the app actually ships.
+                    docker run --name sec-${BUILD_NUMBER} ${IMAGE_NAME}:${VERSION} sh -c "
+                        mkdir -p /tmp/reports
+                        pip freeze > /tmp/reports/app-packages.txt
+                        pip install -q bandit pip-audit
+                        bandit -r app -x app/tests -f json -o /tmp/reports/bandit.json
+                        pip-audit -r /tmp/reports/app-packages.txt --no-deps --disable-pip -f json -o /tmp/reports/pip-audit.json
+                        pip-audit -r /tmp/reports/app-packages.txt --no-deps --disable-pip
+                        bandit -r app -x app/tests -ll
+                    "
+                    BANDIT_STATUS=$?
                     docker cp sec-${BUILD_NUMBER}:/tmp/reports/. reports/
                     docker rm sec-${BUILD_NUMBER}
 
                     echo "===== 3. Trivy (whole Docker image) ====="
-                    docker run --rm \
-                      -v /var/run/docker.sock:/var/run/docker.sock \
-                      -v trivy-cache:/root/.cache \
-                      aquasec/trivy:latest image --scanners vuln --severity HIGH,CRITICAL \
-                      ${IMAGE_NAME}:${VERSION}
+                    # Full report saved as evidence
                     docker run --rm \
                       -v /var/run/docker.sock:/var/run/docker.sock \
                       -v trivy-cache:/root/.cache \
@@ -187,11 +195,38 @@ pipeline {
                       aquasec/trivy:latest image --scanners vuln --format json \
                       --output "$WORKSPACE/reports/trivy.json" \
                       ${IMAGE_NAME}:${VERSION}
+
+                    # Readable table of High and Critical findings (report only)
+                    docker run --rm \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      -v trivy-cache:/root/.cache \
+                      --volumes-from jenkins \
+                      aquasec/trivy:latest image --scanners vuln --severity HIGH,CRITICAL \
+                      --ignorefile "$WORKSPACE/.trivyignore" \
+                      ${IMAGE_NAME}:${VERSION}
+
+                    # GATE: fail on any Critical vulnerability that has a fix available
+                    echo "===== Security gate: Critical vulnerabilities with a fix ====="
+                    docker run --rm \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      -v trivy-cache:/root/.cache \
+                      --volumes-from jenkins \
+                      aquasec/trivy:latest image --scanners vuln --severity CRITICAL \
+                      --ignore-unfixed --exit-code 1 \
+                      --ignorefile "$WORKSPACE/.trivyignore" \
+                      ${IMAGE_NAME}:${VERSION}
+                    TRIVY_STATUS=$?
+
+                    echo "===== Security gate result ====="
+                    [ $BANDIT_STATUS -ne 0 ] && echo "FAILED: Bandit found Medium or High severity issues in the source code"
+                    [ $TRIVY_STATUS -ne 0 ] && echo "FAILED: Trivy found Critical vulnerabilities that have a fix available"
+                    [ $BANDIT_STATUS -eq 0 ] && [ $TRIVY_STATUS -eq 0 ] && echo "PASSED: no Medium/High code issues and no fixable Critical vulnerabilities"
+                    [ $BANDIT_STATUS -eq 0 ] && [ $TRIVY_STATUS -eq 0 ]
                 '''
             }
             post {
                 always {
-                    archiveArtifacts artifacts: 'reports/bandit.json, reports/pip-audit.json, reports/trivy.json', allowEmptyArchive: true
+                    archiveArtifacts artifacts: 'reports/bandit.json, reports/pip-audit.json, reports/trivy.json, reports/app-packages.txt', allowEmptyArchive: true
                 }
             }
         }

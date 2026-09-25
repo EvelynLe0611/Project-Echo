@@ -1,0 +1,3 @@
+# Accepted vulnerabilities - each entry is justified in the security report.
+# Format: CVE ID, then a comment with the reason and planned mitigation.
+# Entries are added only after review, never to hide unreviewed findings.

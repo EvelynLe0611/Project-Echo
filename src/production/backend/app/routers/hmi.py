@@ -13,7 +13,6 @@ from app.database import Events, Movements, Microphones, User, Role, ROLES, Requ
 from fastapi.responses import JSONResponse
 import paho.mqtt.publish as publish
 import bcrypt
-from flask import jsonify
 import jwt
 import requests
 import datetime
