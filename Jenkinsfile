@@ -143,9 +143,9 @@ pipeline {
 
         stage('Code Quality') {
             steps {
-                // The coverage report was created inside a container where the code lived at /app.
+                // The coverage report was created inside a container where the code lived at /app/app.
                 // Point it at the real folder in the repo so SonarCloud can match the files.
-                                sh "sed -i 's#<source>/app#<source>src/production/backend#' reports/coverage.xml"
+                sh "sed -i 's#<source>/app#<source>src/production/backend#' reports/coverage.xml"
 
                 withCredentials([string(credentialsId: 'SONAR_TOKEN', variable: 'SONAR_TOKEN')]) {
                     sh '''
@@ -159,6 +159,39 @@ pipeline {
                           -Dsonar.qualitygate.wait=true \
                           -Dsonar.qualitygate.timeout=300
                     '''
+                }
+            }
+        }
+
+        stage('Security') {
+            steps {
+                sh '''
+                    mkdir -p reports
+                    docker rm -f sec-${BUILD_NUMBER} 2>/dev/null || true
+
+                    echo "===== 1. Bandit (source code) and 2. pip-audit (Python libraries) ====="
+                    docker run --name sec-${BUILD_NUMBER} ${IMAGE_NAME}:${VERSION} sh -c "pip install -q bandit pip-audit && mkdir -p /tmp/reports && bandit -r app -x app/tests -f json -o /tmp/reports/bandit.json; bandit -r app -x app/tests -ll; pip-audit -f json -o /tmp/reports/pip-audit.json; pip-audit; exit 0"
+                    docker cp sec-${BUILD_NUMBER}:/tmp/reports/. reports/
+                    docker rm sec-${BUILD_NUMBER}
+
+                    echo "===== 3. Trivy (whole Docker image) ====="
+                    docker run --rm \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      -v trivy-cache:/root/.cache \
+                      aquasec/trivy:latest image --scanners vuln --severity HIGH,CRITICAL \
+                      ${IMAGE_NAME}:${VERSION}
+                    docker run --rm \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      -v trivy-cache:/root/.cache \
+                      --volumes-from jenkins \
+                      aquasec/trivy:latest image --scanners vuln --format json \
+                      --output "$WORKSPACE/reports/trivy.json" \
+                      ${IMAGE_NAME}:${VERSION}
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'reports/bandit.json, reports/pip-audit.json, reports/trivy.json', allowEmptyArchive: true
                 }
             }
         }
